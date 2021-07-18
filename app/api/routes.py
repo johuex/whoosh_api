@@ -39,7 +39,7 @@ def get_park(lat, lon):
     0 - час который мы предсказываем
     4 - день который мы предсказываем (0 - понедельник и т.д.)
     '''
-    response = ssk.encode(assign.nbiggest(5, 'distance_to_location'))
+    response = ssk.encode(assign.nbiggest(5))
 
     return jsonify(response)
 
