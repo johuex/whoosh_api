@@ -6,6 +6,8 @@ import numpy as np
 from config import ROOT_DIR
 import os
 import app.api.serialize_sk as ssk
+import app.api.distance as ds
+import math
 
 
 @bp.route('/check')
@@ -14,7 +16,7 @@ def check():
 
 @bp.route('/parking/<lat>/<lon>', methods=['GET', 'POST'])
 def get_park(lat, lon):
-
+    best_parks = ds.best_parkings()  #тут мы получили лучшие парковки
     # converting from string to float
     lat = float(lat)
     lon = float(lon)
@@ -31,13 +33,14 @@ def get_park(lat, lon):
     file.close()
 
     # prediction
-    assign = checkMl_z.get(282199231).predict(np.reshape([0, 4], (1, -1)))
+    assign = np.sqrt(checkMl_z.get(282199231).predict(best_parks))
     '''
     где 282199231 - это id парковки из того файла
     0 - час который мы предсказываем
     4 - день который мы предсказываем (0 - понедельник и т.д.)
     '''
-    response = ssk.encode(assign)
+    response = ssk.encode(assign.nbiggest(5, 'distance_to_location'))
+
     return jsonify(response)
 
 
