@@ -14,6 +14,7 @@ def check():
 
 @bp.route('/parking/<lat>/<lon>', methods=['GET', 'POST'])
 def get_park(lat, lon):
+
     # converting from string to float
     lat = float(lat)
     lon = float(lon)
@@ -25,18 +26,18 @@ def get_park(lat, lon):
     checkMl_z = {}
     pickle_path = os.path.join(ROOT_DIR, 'other\models.pckl')
     file = open(pickle_path, 'rb')
-    for i in range(776):
+    for i in range(362):
         checkMl_z[itemlist[i]] = pickle.load(file)
     file.close()
 
     # prediction
-    checkMl_z.get(282199231).predict(np.reshape([0, 4], (1, -1)))
+    assign = checkMl_z.get(282199231).predict(np.reshape([0, 4], (1, -1)))
     '''
     где 282199231 - это id парковки из того файла
     0 - час который мы предсказываем
     4 - день который мы предсказываем (0 - понедельник и т.д.)
     '''
-    response = ssk.encode(checkMl_z)
+    response = ssk.encode(assign)
     return jsonify(response)
 
 
