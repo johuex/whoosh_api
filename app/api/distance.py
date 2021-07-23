@@ -11,7 +11,7 @@ from libpysal.cg.alpha_shapes import alpha_shape_auto
 import sys
 from esda.adbscan import ADBSCAN, get_cluster_boundary, remap_lbls
 import os
-from config import ROOT_DIR, LINK
+from config import ROOT_DIR, LINK, parking_gdf, gdf_nodes, G
 
 '''---------------------------------------'''
 
@@ -217,6 +217,8 @@ def best_parking(data, parking_gdf):
     """
 
     '''Расчет расстояния от выданной точки до велопарковок созданных на основе кластеризации'''
+    global G
+    global gdf_nodes
     # подаем на вход актуальные координаты и превращаем их в геодатафрейм для использования в поиске узлов графа
     if parking_gdf is None:
         G, gdf_nodes, parking_gdf = create_parking_dtf()

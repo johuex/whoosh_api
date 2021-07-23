@@ -3,12 +3,11 @@ from app.api.errors import bad_request
 from flask import jsonify, request, url_for
 import pickle
 import numpy as np
-from config import ROOT_DIR
+from config import ROOT_DIR, parking_gdf, gdf_nodes, G
 import os
 import app.api.serialize_sk as ssk
 import app.api.distance as ds
 
-parking_gdf = None
 
 @bp.route('/check')
 def check():
@@ -18,6 +17,8 @@ def check():
 @bp.route('/parking', methods=['GET', 'POST'])
 def get_park():
     global parking_gdf
+    global G
+    global gdf_nodes
     # receive data from request
     data = request.get_json() or {}
     # checking data and converting to float
@@ -32,6 +33,7 @@ def get_park():
 
     parking_gdf, best_parks = ds.best_parking(data, parking_gdf)  # give lan and lot and receive best parkings
 
+    '''
     # opening models
     dict_path = os.path.join(ROOT_DIR, 'other/dict')
     with open(dict_path, 'rb') as fp:
@@ -45,13 +47,9 @@ def get_park():
 
     # prediction
     assign = np.sqrt(checkMl_z.get(282199231).predict(best_parks))
-    '''
-    где 282199231 - это id парковки из того файла
-    0 - час который мы предсказываем
-    4 - день который мы предсказываем (0 - понедельник и т.д.)
-    '''
     response = ssk.encode(assign.nbiggest(5))
-
+    '''
+    response = ssk.encode(best_parks)
     return jsonify(response)
 
 

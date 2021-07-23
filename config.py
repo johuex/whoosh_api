@@ -12,3 +12,7 @@ FORMAT = '00000000.csv.gz'
 
 ROOT_DIR = os.path.dirname(os.path.abspath('config.py'))
 LINK = WEB + REGION + STATION + START + FINISH + PIECE + CODE + FORMAT
+
+parking_gdf = None
+G = None
+gdf_nodes = None
