@@ -15,7 +15,7 @@ def check():
     return 'Works!'
 
 
-@bp.route('/parking', methods=['POST'])
+@bp.route('/parking', methods=['GET', 'POST'])
 def get_park():
     global parking_gdf
     # receive data from request
@@ -33,11 +33,11 @@ def get_park():
     parking_gdf, best_parks = ds.best_parking(data, parking_gdf)  # give lan and lot and receive best parkings
 
     # opening models
-    dict_path = os.path.join(ROOT_DIR, 'other\dict')
+    dict_path = os.path.join(ROOT_DIR, 'other/dict')
     with open(dict_path, 'rb') as fp:
         itemlist = pickle.load(fp)
     checkMl_z = {}
-    pickle_path = os.path.join(ROOT_DIR, 'other\models.pckl')
+    pickle_path = os.path.join(ROOT_DIR, 'other/models.pckl')
     file = open(pickle_path, 'rb')
     for i in range(362):
         checkMl_z[itemlist[i]] = pickle.load(file)

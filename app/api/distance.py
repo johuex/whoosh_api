@@ -2,7 +2,6 @@ import networkx as nx
 import osmnx as ox
 ox.config(use_cache=True, log_console=True)
 import datetime as dt
-import sklearn
 from sklearn.neighbors import KDTree
 import pandas as pd
 import contextily as cx
@@ -11,7 +10,6 @@ import geopandas as gpd
 from libpysal.cg.alpha_shapes import alpha_shape_auto
 import sys
 from esda.adbscan import ADBSCAN, get_cluster_boundary, remap_lbls
-import overpass
 import os
 from config import ROOT_DIR, LINK
 
@@ -30,7 +28,7 @@ def create_parking_dtf():
 
     '''добываем данные о погоде'''
     # открываем агрегированные данные по байкам
-    ks_agg_path = os.path.join(ROOT_DIR, 'other\\ks_aggregated.csv')
+    ks_agg_path = os.path.join(ROOT_DIR, 'other/ks_aggregated.csv')
     df = pd.read_csv(ks_agg_path)
     df['datetime_x'] = df['datetime_x'].astype('datetime64')
     df['datetime_y'] = df['datetime_y'].astype('datetime64')
