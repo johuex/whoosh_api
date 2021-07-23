@@ -1,207 +1,248 @@
 import networkx as nx
 import osmnx as ox
 ox.config(use_cache=True, log_console=True)
-from config import ROOT_DIR
-import os
-
-import matplotlib
-import matplotlib.pyplot as plt
-
+import datetime as dt
 import sklearn
 from sklearn.neighbors import KDTree
-
 import pandas as pd
-
+import contextily as cx
 import numpy as np
-
 import geopandas as gpd
-
+from libpysal.cg.alpha_shapes import alpha_shape_auto
+import sys
+from esda.adbscan import ADBSCAN, get_cluster_boundary, remap_lbls
 import overpass
+import os
+from config import ROOT_DIR, LINK
 
-import folium
-from folium.plugins import MarkerCluster
-from folium.plugins import HeatMap
+'''---------------------------------------'''
 
-from shapely.geometry import Point, LineString, MultiPoint, MultiLineString, MultiPolygon, Polygon
-def best_parkings():
 
-    """##Добываем московский граф"""
-
-    #Записываем границы "Москвы"
+def create_parking_dtf():
+    '''Добываем московский граф'''
+    # Границы "Москвы"
     lat_max = 55.927854
     lat_min = 55.541984
     lon_max = 37.883441
     lon_min = 37.347858
-
     G = ox.graph_from_bbox(lat_max, lat_min, lon_max, lon_min, network_type='drive')
+    gdf_nodes = ox.graph_to_gdfs(G, edges=False)  # список узлов всего графа - будем использовать в расчетах
+
+    '''добываем данные о погоде'''
+    # открываем агрегированные данные по байкам
+    ks_agg_path = os.path.join(ROOT_DIR, 'other\\ks_aggregated.csv')
+    df = pd.read_csv(ks_agg_path)
+    df['datetime_x'] = df['datetime_x'].astype('datetime64')
+    df['datetime_y'] = df['datetime_y'].astype('datetime64')
+
+    weather_df = pd.read_csv(LINK,
+                             compression='gzip', header=6, encoding='UTF-8',
+                             error_bad_lines=False, delimiter=';', index_col=False)
+    weather_df = weather_df.rename(columns={"Местное время в Москве (центр, Балчуг)": "datetime_w", "E'": "E_"})
+    weather_df['datetime_w'] = weather_df['datetime_w'].astype('datetime64')
+    # Корректировка данных о погоде
+    weather_df['rain'] = weather_df.apply(WW_fixer, axis=1)
+    weather_df['RRR'] = weather_df.apply(RRR_fixer, axis=1)
+    weather_df['RRR'] = weather_df['RRR'].astype('float64')
+    weather_df['Nh'] = weather_df.apply(Nh_fixer, axis=1)
+    weather_df['Nh'] = weather_df['Nh'].astype('float64')
+    weather_df['N'] = weather_df.apply(N_fixer, axis=1)
+    weather_df['N'] = weather_df['N'].astype('float64')
+    weather_df['H'] = weather_df.apply(H_fixer, axis=1)
+    weather_df['H'] = weather_df['H'].astype('float64')
+    weather_df_final = weather_df.drop(
+        ['Pa', 'DD', 'ff10', 'ff3', 'Tn', 'Tx', 'Cl', 'Cm', 'Ch', 'VV', 'Td', 'E', 'Tg', 'E_', 'sss', 'WW', 'W1', 'W2',
+         'tR'], axis=1)
+    weather_df_final['datetime_w'] = weather_df_final['datetime_w'].astype('datetime64')
+
+    '''Соединение обработанной погоды и агрегированных данных кикшеринга'''
+    df['date_day'] = df['datetime_x'].dt.date
+    weather_df_final['date_day'] = weather_df_final['datetime_w'].dt.date
+    weather_df_final['start_hour'] = weather_df_final['datetime_w'].dt.hour
+    df = df.merge(weather_df_final, how='left', on=['date_day', 'start_hour'])
+    missing = ['T', 'Po', 'P', 'U', 'Ff', 'N', 'Nh', 'H', 'RRR', 'rain']
+    df.sort_values(by='datetime_x', ascending=True)
+    for i in missing:
+        df[i] = df[i].fillna(method='ffill')
+    df.sort_values(by='datetime_x', ascending=True).head(50)
+
+    '''Пространственный кластеринг парковок на основе точек стартов самокатов - 
+    получаемый новый датасет вместо парковок с data.mos.ru'''
+    df = df.query('lat_x > @lat_min and lat_x < @lat_max and lon_x < @lon_max and lon_x > @lon_min')
+    # делаем геодатафрейм из датафрейма стартов самокатов
+    starts_gdf_ll = gpd.GeoDataFrame(
+        df, geometry=gpd.points_from_xy(df.lon_x, df.lat_x)).set_crs('epsg:4326')
+    # перепроецируем в более подходящую для карт и измерения расстояний проекцию https://epsg.io/20007
+    starts_gdf = starts_gdf_ll.to_crs(epsg=20007)
+    # записываем чтобы не потерять спроецированные метровые координаты
+    starts_gdf["X"] = starts_gdf.geometry.x
+    starts_gdf["Y"] = starts_gdf.geometry.y
+
+    # создаем кластеры с помощью алгоритма ADBSCAN
+    # основные параметры - 100м радиус поиска
+    # 3 самоката - это уже будет кластер
+    # 0.6 датасета используется при каждом перерасчете
+    # 200 перерасчетов выполняется
+    adbs = ADBSCAN(eps=100,
+                   min_samples=3,
+                   pct_exact=0.6,
+                   algorithm='kd_tree',
+                   reps=200,
+                   keep_solus=True,
+                   n_jobs=-1)
+    np.random.seed(42)
+    adbs.fit(starts_gdf)
+    # переносим в геодатафрейм получившиеся классы кластеров
+    starts_gdf = starts_gdf.merge(adbs.votes, left_index=True, right_index=True)
+    parking = get_cluster_boundary(adbs.votes["lbls"], starts_gdf, crs=starts_gdf.crs)
+    # сделаем геодатафрейм
+    parking = gpd.GeoDataFrame(parking, geometry=parking, crs=parking.crs.to_string())
+    # переводим в датафрейм с географическими координатами в виде градусов для маршрутизации
+    parking_gdf = gpd.GeoDataFrame(parking, geometry=parking['geometry'].centroid.to_crs(epsg=4326), crs=4326).drop(0,
+                                                                                                                    axis=1).reset_index(
+        drop=True)
+    # защита от "пропущенных" геометрий, которые могли возникнуть при поиске центроида
+    parking_gdf['missing_geo'] = parking_gdf['geometry'].is_empty
+    parking_gdf = parking_gdf.query('missing_geo == False').reset_index(drop=True)
+    return G, gdf_nodes, parking_gdf
+    # !!! далее именно этот датафрейм мы подставляем в качестве парковок в наш код, который рассчитывает расстояние от
+    # заданной точки до парковок!!!
 
 
-    ox.plot_raph(G, figsize=(20,20))
-    plt.show()
+def WW_fixer(row):
+    """функция, превращающая текст в числовые параметры"""
+# используем две колонки - текущая погода и погода за прошлые три часа. 1 = дождь, 2 = ливень, 3 = гроза, 0 = дождя нет
+    if row['WW'] == 'Гроза слабая или умеренная без града, но с дождем и/или снегом в срок наблюдения.' or row['WW'] == 'Гроза (с осадками или без них).':
+        return 3
+    if row['WW'] == 'Дождь незамерзающий непрерывный слабый в срок наблюдения.' or row['WW'] == 'Дождь незамерзающий непрерывный умеренный в срок наблюдения.' or ['WW'] == 'Дождь (незамерзающий) неливневый. ':
+        return 1
+    if row['WW'] == 'Ливневый(ые) дождь(и) слабый(ые) в срок наблюдения или за последний час. ' or row['WW'] == 'Ливневый(ые) дождь(и) очень сильный(ые) в срок наблюдения или за последний час. ':
+        return 2
+    if row['WW'] == 'Состояние неба в общем не изменилось. ' and row['W1'] == 'Ливень (ливни).':
+        return 2
+    if row['WW'] == 'Состояние неба в общем не изменилось. ' and row['W1'] == 'Дождь.':
+        return 1
+    if row['WW'] == 'Состояние неба в общем не изменилось. ' and row['W1'] == 'Гроза (грозы) с осадками или без них.':
+        return 3
+    else:
+        return 0
 
-    #список узлов всего графа - будем использовать в расчетах
-    gdf_nodes = ox.graph_to_gdfs(G, edges=False)
-    gdf_nodes.head()
 
-    """## Расчет расстояния от выданной точки до велопарковок
+def RRR_fixer(row):
+    """Корректировка данных 'Кол-во осадков' """
+    if row['RRR'] == 'Осадков нет':
+        return 0.0
+    return row['RRR']
 
-    Загрузим датафрейм с парковками
+
+def Nh_fixer(row):
+    """Корректировка данных '% наблюдаемых кучевых или слоистых облаков' """
+    if row['Nh'] == 'Облаков нет.':
+        return 0.0
+    if row['Nh'] == '20–30%.':
+        return 0.3
+    if row['Nh'] == '40%.':
+        return 0.4
+    if row['Nh'] == '50%.':
+        return 0.5
+    if row['Nh'] == '60%.':
+        return 0.6
+    if row['Nh'] == '70 – 80%.':
+        return 0.8
+    if row['Nh'] == '90  или более, но не 100%':
+        return 0.9
+    if row['Nh'] == '100%.':
+        return 1
+    return row['Nh']
+
+
+def N_fixer(row):
+    """Корректировка данных 'общая облачность в %' """
+    if row['N'] == 'Облаков нет.':
+        return 0.0
+    if row['N'] == '10%  или менее, но не 0':
+        return 0.1
+    if row['N'] == '20–30%.':
+        return 0.3
+    if row['N'] == '40%.':
+        return 0.4
+    if row['N'] == '50%.':
+        return 0.5
+    if row['N'] == '60%.':
+        return 0.6
+    if row['N'] == '70 – 80%.':
+        return 0.8
+    if row['N'] == '90  или более, но не 100%':
+        return 0.9
+    if row['N'] == '100%.':
+        return 1
+    return row['N']
+
+
+def H_fixer(row):
+    """Корректировка данных 'высота основания самых низких облаков' """
+    if row['H'] == '2500 или более, или облаков нет.':
+        return 2500
+    if row['H'] == '1000-1500':
+        return 1000
+    if row['H'] == '600-1000':
+        return 600
+    if row['H'] == '300-600':
+        return 300
+    return row['H']
+
+
+def find_nearest_node(tree, gdf, point):
+    """Поиск ближайших узлов графа к какой-то выданной нам точке и просто получаем их индекс"""
+    # индексы используются в расчете маршрутов и т.д.
+    closest_idx = tree.query([(point.y, point.x)], k=1, return_distance=False)[0]
+    nearest_node = gdf.iloc[closest_idx].index.values[0]
+    return nearest_node
+
+'''
+def nx_distance_actual(row, tree, gdf_nodes, a_location_gdf, G):
+    node1 = find_nearest_node(tree, gdf_nodes, row['geometry'])  # здесь например датасет всех парковок
+    node2 = find_nearest_node(tree, gdf_nodes, a_location_gdf['geometry'][0])  # здесь наш actual location
+    try:
+        row['distance_to_location'] = nx.shortest_path_length(G, node1, node2, weight='length')
+    except nx.NetworkXNoPath:
+        row['distance_to_location'] = None
+    return row['distance_to_location']
+    '''
+'''---------------------------------------'''
+
+
+def best_parking(data, parking_gdf):
+    """
+    data: It is dict with latitude and longitude
+    return: List of 5 the best and nearest parks
     """
 
-    parking_df = pd.read_csv('bikestops.csv')
-    parking_df.head()
-
-    """Сделаем из него геодатафрейм чтобы исползовать в расчете расстояний"""
-
-    parking_gdf = gpd.GeoDataFrame(
-        parking_df, geometry=gpd.points_from_xy(parking_df.Longitude_WGS84, parking_df.Latitude_WGS84)).set_crs('epsg:4326')
-    parking_gdf.head()
-
-    """Дальше пишем код для расчета расстояний"""
-
-    #здесь мы ищем ближайшие узлы графа к какой-то выданной нам точке и просто получаем их индекс. индексы используются в расчете маршрутов и т.д.
-    tree = KDTree(gdf_nodes[['y','x']], metric='euclidean')
-
-    def find_nearest_node(tree, gdf, point):
-
-      closest_idx = tree.query([(point.y, point.x)], k=1, return_distance=False)[0]
-      nearest_node = gdf.iloc[closest_idx].index.values[0]
-
-      return nearest_node
-
-    #допустим у нас есть координаты актуального местоположения
-    #подаем на вход координаты и превращаем их в геодатафрейм для использования в поиске узлов графа
-    a_location_lon = 37.505559
-    a_location_lat = 55.747303
+    '''Расчет расстояния от выданной точки до велопарковок созданных на основе кластеризации'''
+    # подаем на вход актуальные координаты и превращаем их в геодатафрейм для использования в поиске узлов графа
+    if parking_gdf is None:
+        G, gdf_nodes, parking_gdf = create_parking_dtf()
+    a_location_lon = data['lon']
+    a_location_lat = data['lat']
     a_location_df = pd.DataFrame(
         {'act_lat': a_location_lat,
          'act_lon': a_location_lon}, index=[0])
-
     a_location_gdf = gpd.GeoDataFrame(
         a_location_df, geometry=gpd.points_from_xy(a_location_df.act_lon, a_location_df.act_lat)).set_crs('epsg:4326')
 
-    #код расчета расстояния для каждой строки геодатафрейма относительно фиксированной точки расположения,которая подается в виде координат
+    # здесь мы ищем ближайшие узлы графа к какой-то выданной нам точке и просто получаем их индекс. индексы используются в расчете маршрутов и т.д.
+    tree = KDTree(gdf_nodes[['y', 'x']], metric='euclidean')
+
+    # это аналитический стиль программирования не бейте
     def nx_distance_actual(row):
-      node1=find_nearest_node(tree,gdf_nodes,row['geometry']) #здесь например датасет всех парковок
-      node2=find_nearest_node(tree,gdf_nodes,a_location_gdf['geometry'][0]) #здесь наш actual location
-      try:
-        row['distance_to_location'] = nx.shortest_path_length(G, node1, node2, weight='length')
-      except nx.NetworkXNoPath:
-        row['distance_to_location'] = None
-      return row['distance_to_location']
+        node1 = find_nearest_node(tree, gdf_nodes, row['geometry'])  # здесь например датасет всех парковок
+        node2 = find_nearest_node(tree, gdf_nodes, a_location_gdf['geometry'][0])  # здесь наш actual location
+        try:
+            row['distance_to_location'] = nx.shortest_path_length(G, node1, node2, weight='length')
+        except nx.NetworkXNoPath:
+            row['distance_to_location'] = None
+        return row['distance_to_location']
 
-    """Производим расчет расстояний в датафрейме с парковками"""
-
-    # Commented out IPython magic to ensure Python compatibility.
-    # %%time
-    # parking_gdf['distance_to_location'] = parking_gdf.apply(nx_distance_actual, axis=1)
-
-    parking_gdf.head()
-
-    """##Поиграем с графом - поищем разные точки, ближайшие к ним узлы графа и пути между ними"""
-
-    api = overpass.API(endpoint='https://overpass.kumi.systems/api/interpreter')
-    response = api.get('node["name"="Эрмитаж"]')
-    response
-
-    hermitage=gpd.GeoDataFrame(
-        geometry=[Point(response[0]['geometry']['coordinates'])],
-        crs={'init':'epsg:4326'}
-    )
-
-    api = overpass.API(endpoint='https://overpass.kumi.systems/api/interpreter')
-    response = api.get('node["name"="ВДНХ"]')
-    response
-
-    vdnh = gpd.GeoDataFrame(
-        geometry=[Point(response[0]['geometry']['coordinates'])],
-        crs={'init':'epsg:4326'}
-    )
-
-    api = overpass.API(endpoint='https://overpass.kumi.systems/api/interpreter')
-    response = api.get('node["name"="Зарядье"]')
-    response
-
-    zaryadye = gpd.GeoDataFrame(
-        geometry=[Point(response[0]['geometry']['coordinates'])],
-        crs={'init':'epsg:4326'}
-    )
-
-    """Напишем функцию, которая будет получать расстояние между точкой, которую мы дадим и между точкой в Зарядье - примем это за центр города"""
-
-    def nx_distance(point_a):
-      node1=find_nearest_node(tree,gdf_nodes,point_a)
-      node2=35884663
-      #distance = ox.distance.euclidean_dist_vec(gdf_nodes[node1].y, gdf_nodes[node1].x, gdf_nodes[node2].y, gdf_nodes[node2].x)
-      distance = nx.shortest_path_length(G, node1, node2, weight='length')
-      return distance
-
-    """Функция которая возвращает маршрут кратчайший между двумя точками"""
-
-    def osmnx_route(x1,y1,x2,y2):
-      node1=find_nearest_node(tree,gdf_nodes,Point(x1,y1))
-      node2=find_nearest_node(tree,gdf_nodes,Point(x2,y2))
-      route = nx.shortest_path(G, node1, node2)
-
-    """Получаем здесь узлы рядом с нашими тестовыми точками"""
-
-    nearest_vdnh = find_nearest_node(tree,gdf_nodes,vdnh.to_crs(epsg=4326)['geometry'][0])
-    nearest_zaryadye = find_nearest_node(tree,gdf_nodes,zaryadye.to_crs(epsg=4326)['geometry'][0])
-    nearest_hermitage = find_nearest_node(tree,gdf_nodes,hermitage.to_crs(epsg=4326)['geometry'][0])
-
-
-    """## Найдем расстояния между всеми точками старта whoosh и центром города"""
-
-    df = pd.read_csv('ks_aggregated.csv')
-
-    """Имеет смысл смотреть на данные только в пределах "Москвы". Москвой можно считать вот эти координаты"""
-
-    lat_max = 55.927854
-    lat_min = 55.541984
-    lon_max = 37.883441
-    lon_min = 37.347858
-
-    df.info()
-
-    df.head(10)
-
-    """Выкидываем лишнее через Query"""
-
-    df = df.query('lat_x > @lat_min and lat_x < @lat_max and lon_x < @lon_max and lon_x > @lon_min')
-
-    df.info()
-
-    """Переводим в геодатафрейм"""
-
-    gdf_start = gpd.GeoDataFrame(
-        df, geometry=gpd.points_from_xy(df.lon_x, df.lat_x)).set_crs('epsg:4326')
-
-    gdf_finish = gpd.GeoDataFrame(
-        df, geometry=gpd.points_from_xy(df.lon_y, df.lat_y)).set_crs('epsg:4326')
-
-    gdf_start.head()
-
-    """Теперь находим для каждого датафрейма - стартов и финишей расстояние до центра. Сможем понять был ли пользователь ближе к центру на старте или в конце поездки"""
-
-    #для простой пары точек
-    def nx_distance(point_a):
-      node1=find_nearest_node(tree,gdf_nodes,point_a)
-      node2=nearest_zaryadye
-      distance = nx.shortest_path_length(G, node1, node2, weight='length')
-      return distance
-
-    #для каждой строки геодатафрейма относительно фиксированной точки центра города - зарядье
-    def nx_distance_row(row):
-      node1=find_nearest_node(tree,gdf_nodes,row['geometry']) #здесь может быть датасет всех парковок
-      node2=nearest_zaryadye #здесь может быть наш actual location
-      try:
-        row['distance_to_center'] = nx.shortest_path_length(G, node1, node2, weight='length')
-      except nx.NetworkXNoPath:
-        row['distance_to_center'] = None
-      return row['distance_to_center']
-
-    gdf_start['distance_to_center'] = gdf_start.apply(nx_distance_row, axis=1)
-
-    gdf_finish['distance_to_center'] = gdf_finish.apply(nx_distance_row, axis=1)
-    top_stations = parking_gdf.nsmallest(5, 'distance_to_location')
-    return top_stations
+    parking_gdf['distance_to_location'] = parking_gdf.apply(nx_distance_actual, axis=1)
+    top_stations = parking_gdf.sort_values(by='distance_to_location', ascending=True)[['geometry', 'distance_to_location']].head(3)
+    return parking_gdf, top_stations

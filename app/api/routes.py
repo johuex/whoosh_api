@@ -7,19 +7,30 @@ from config import ROOT_DIR
 import os
 import app.api.serialize_sk as ssk
 import app.api.distance as ds
-import math
 
+parking_gdf = None
 
 @bp.route('/check')
 def check():
     return 'Works!'
 
-@bp.route('/parking/<lat>/<lon>', methods=['GET', 'POST'])
-def get_park(lat, lon):
-    best_parks = ds.best_parkings()  #тут мы получили лучшие парковки
-    # converting from string to float
-    lat = float(lat)
-    lon = float(lon)
+
+@bp.route('/parking', methods=['POST'])
+def get_park():
+    global parking_gdf
+    # receive data from request
+    data = request.get_json() or {}
+    # checking data and converting to float
+    if 'lat' in data:
+        data['lat'] = float(data['lat'])
+    else:
+        bad_request("No latitude in request")
+    if 'lon' in data:
+        data['lon'] = float(data['lon'])
+    else:
+        bad_request("No longitude in request")
+
+    parking_gdf, best_parks = ds.best_parking(data, parking_gdf)  # give lan and lot and receive best parkings
 
     # opening models
     dict_path = os.path.join(ROOT_DIR, 'other\dict')
