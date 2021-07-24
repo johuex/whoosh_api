@@ -54,7 +54,7 @@ def get_park():
     top_parks_id = np.array(top_parks_id)
     assign = np.empty(3)
     assign = top_parks_dist/1000 * checkMl_z.get(282199231).predict(np.reshape([19,2], (1, -1)))**2
-    response = ssk.encode(top_parks_id[assign.argmax()])
-    return jsonify(response)
+    #response = ssk.encode(top_parks_id[assign.argmax()])
+    return jsonify({"ID": int(top_parks_id[assign.argmax()])})
 
 
