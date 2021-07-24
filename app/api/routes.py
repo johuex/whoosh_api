@@ -33,7 +33,7 @@ def get_park():
 
     parking_gdf, best_parks = ds.best_parking(data, parking_gdf)  # give lan and lot and receive best parkings
 
-    '''
+    
     # opening models
     dict_path = os.path.join(ROOT_DIR, 'other/dict')
     with open(dict_path, 'rb') as fp:
@@ -46,10 +46,15 @@ def get_park():
     file.close()
 
     # prediction
-    assign = np.sqrt(checkMl_z.get(282199231).predict(best_parks))
-    response = ssk.encode(assign.nbiggest(5))
-    '''
-    response = ssk.encode(best_parks)
+    top_parks_dist = best_parks.distance_to_location
+    top_parks_dist = top_parks_dist.tolist()
+    top_parks_dist = np.array(top_parks_dist)
+    top_parks_id = best_parks.index
+    top_parks_id = top_parks_id.tolist()
+    top_parks_id = np.array(top_parks_id)
+    assign = np.empty(3)
+    assign = top_parks_dist/1000 * checkMl_z.get(282199231).predict(np.reshape([19,2], (1, -1)))**2
+    response = ssk.encode(top_parks_id[assign.argmax()])
     return jsonify(response)
 
 
