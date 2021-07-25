@@ -3,9 +3,11 @@ from app.api.errors import bad_request
 from flask import jsonify, request, url_for
 import pickle
 import numpy as np
-from config import ROOT_DIR, parking_gdf, gdf_nodes, G
+from config import ROOT_DIR, parking_gdf, gdf_nodes, G, api_key
 import os
 import app.api.distance as ds
+import requests
+import ast
 
 
 @bp.route('/check')
@@ -48,12 +50,24 @@ def get_park():
     top_parks_dist = best_parks.distance_to_location
     top_parks_dist = top_parks_dist.tolist()
     top_parks_dist = np.array(top_parks_dist)
-    top_parks_id = best_parks.index
-    top_parks_id = top_parks_id.tolist()
-    top_parks_id = np.array(top_parks_id)
+    top_parks_point = best_parks.geometry
+    top_parks_point = top_parks_point.tolist()
+    top_parks_point = np.array(top_parks_point)
     assign = np.empty(3)
     assign = top_parks_dist/1000 * checkMl_z.get(282199231).predict(np.reshape([19,2], (1, -1)))**2
-    #response = ssk.encode(top_parks_id[assign.argmax()])
-    return jsonify({"ID": int(top_parks_id[assign.argmax()])})
+ 
+
+    body = {"coordinates":[[data["lat"],data["lon"]],[float(top_parks_point[assign.argmax()].y), float(top_parks_point[assign.argmax()].x)]]}
+
+    headers = {
+        'Accept': 'application/json, application/geo+json, application/gpx+xml, img/png; charset=utf-8',
+        'Authorization': str(api_key),
+        'Content-Type': 'application/json; charset=utf-8'
+    }
+    full_responce = requests.post('https://api.openrouteservice.org/v2/directions/foot-walking', json=body, headers=headers)
+    content_responce = full_responce.content
+    dict_content_responce = content_responce.decode()
+    route_responce = ast.literal_eval(dict_content_responce)
+    return jsonify(route_responce)
 
 

@@ -1,4 +1,9 @@
 import os, sys
+from dotenv import load_dotenv
+
+dotenv_path = os.path.join(os.path.dirname(__file__), './.env')
+if os.path.exists(dotenv_path):
+    load_dotenv(dotenv_path)
 
 # инпуты чтобы составить ссылку по которой мы будем качать архив:
 WEB = 'http://37.9.3.253/download/files.synop/'
@@ -17,3 +22,4 @@ parking_gdf = None
 G = None
 gdf_nodes = None
 tree = None
+api_key = os.environ.get("api_key")
