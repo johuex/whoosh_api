@@ -11,7 +11,7 @@ from libpysal.cg.alpha_shapes import alpha_shape_auto
 import sys
 from esda.adbscan import ADBSCAN, get_cluster_boundary, remap_lbls
 import os
-from config import ROOT_DIR, LINK, parking_gdf, gdf_nodes, G
+from config import ROOT_DIR, LINK, gdf_nodes, G, tree
 
 '''---------------------------------------'''
 
@@ -219,6 +219,7 @@ def best_parking(data, parking_gdf):
     '''Расчет расстояния от выданной точки до велопарковок созданных на основе кластеризации'''
     global G
     global gdf_nodes
+    global tree
     # подаем на вход актуальные координаты и превращаем их в геодатафрейм для использования в поиске узлов графа
     if parking_gdf is None:
         G, gdf_nodes, parking_gdf = create_parking_dtf()
@@ -230,8 +231,9 @@ def best_parking(data, parking_gdf):
     a_location_gdf = gpd.GeoDataFrame(
         a_location_df, geometry=gpd.points_from_xy(a_location_df.act_lon, a_location_df.act_lat)).set_crs('epsg:4326')
 
+    if tree is None:
     # здесь мы ищем ближайшие узлы графа к какой-то выданной нам точке и просто получаем их индекс. индексы используются в расчете маршрутов и т.д.
-    tree = KDTree(gdf_nodes[['y', 'x']], metric='euclidean')
+        tree = KDTree(gdf_nodes[['y', 'x']], metric='euclidean')
 
     # это аналитический стиль программирования не бейте
     def nx_distance_actual(row):
