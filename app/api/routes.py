@@ -24,11 +24,11 @@ def get_park():
     if 'lat' in data:
         data['lat'] = float(data['lat'])
     else:
-        bad_request("No latitude in request")
+        return bad_request("No latitude in request")
     if 'lon' in data:
         data['lon'] = float(data['lon'])
     else:
-        bad_request("No longitude in request")
+        return bad_request("No longitude in request")
 
     parking_gdf, best_parks = ds.best_parking(data, parking_gdf)  # give lan and lot and receive best parkings
 
