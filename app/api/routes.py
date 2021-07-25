@@ -5,7 +5,6 @@ import pickle
 import numpy as np
 from config import ROOT_DIR, parking_gdf, gdf_nodes, G
 import os
-import app.api.serialize_sk as ssk
 import app.api.distance as ds
 
 
