@@ -8,14 +8,17 @@ import os
 import app.api.distance as ds
 import requests
 import ast
+from app import cross_origin
 
 
 @bp.route('/check')
+@cross_origin()
 def check():
     return 'Works!'
 
 
 @bp.route('/parking', methods=['GET', 'POST'])
+@cross_origin()
 def get_park():
     global parking_gdf
     global G
